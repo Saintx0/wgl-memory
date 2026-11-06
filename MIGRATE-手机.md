@@ -1,39 +1,39 @@
 # 手机上装「罔两 · 记忆」
 
-结论先说：**TauriTavern 桌面版不监听任何端口**（我查了进程 65456，`netstat` 里一条 LISTENING 都没有），
+**仓库已建好（私有）**：https://github.com/Saintx0/wgl-memory
+
+手机上：扩展 → 安装扩展 → 填上面这个地址 → 刷新即可。私有库需要凭据，见方案一。
+
+---
+
+结论先说：**TauriTavern 桌面版不监听任何端口**（查过进程，`netstat` 里一条 LISTENING 都没有），
 所以「PC 开着、手机浏览器连过来」这条路在 TauriTavern 上不成立。
 
 手机端只有三条路，按推荐顺序：
 
 ---
 
-## 方案一：私有 Git 仓库（推荐，一次搞定，还能更新）
+## 方案一：Git 仓库（已建好）
 
-TauriTavern 自带原生 Git，「安装扩展」就是一个 URL 输入框。所以最省事的办法是把这个目录变成一个仓库。
-
-**电脑上：**
-
-```bash
-cd wgl-memory
-git init
-git add .
-git commit -m "罔两·记忆 v1.5"
-
-# 在 Gitee / GitHub 建一个空仓库，然后
-git remote add origin https://gitee.com/你的用户名/wgl-memory.git
-git push -u origin master
+```
+https://github.com/Saintx0/wgl-memory      （私有）
 ```
 
-**手机上（TauriTavern）：**
+**手机上（TauriTavern）：** 扩展 → 安装扩展 → 填地址 → 刷新。
 
-1. 扩展 → 安装扩展
-2. 填仓库地址：`https://gitee.com/你的用户名/wgl-memory.git`
-3. 装完刷新
+私有库要凭据，两种办法：
 
-以后改代码只要在电脑上 `git push`，手机上点「更新」即可。
+**A. 把 PAT 拼进 URL**（推荐，装完就不管了）
 
-> 用私有库没问题——TauriTavern 的内置 Git 支持带凭据的私有仓库。
-> 也可以直接放进你们自己的 Gitea / 群晖 Git，只要手机能访问到。
+1. GitHub → Settings → Developer settings → Personal access tokens → 生成一个只勾 `repo` 的 token
+2. 安装时填：`https://<你的PAT>@github.com/Saintx0/wgl-memory.git`
+
+**B. 临时改公开**
+
+仓库里只有 JS 和文档，没有任何密钥。改成 public → 手机装 → 改回 private。
+缺点是以后「更新」会重新要求认证。
+
+**以后更新：** 电脑上 `git push`，手机上点扩展的「更新」。
 
 ---
 
