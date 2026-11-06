@@ -1,8 +1,8 @@
 # 手机上装「罔两 · 记忆」
 
-**仓库已建好（私有）**：https://github.com/Saintx0/wgl-memory
+**仓库已建好（公开、无简介）**：https://github.com/Saintx0/wgl-memory
 
-手机上：扩展 → 安装扩展 → 填上面这个地址 → 刷新即可。私有库需要凭据，见方案一。
+手机上：扩展 → 安装扩展 → 填上面这个地址 → 刷新即可。**不需要任何 token。**
 
 ---
 
@@ -13,29 +13,21 @@
 
 ---
 
-## 方案一：Git 仓库（已建好）
+## 方案一：Git 仓库（已建好，公开）
 
 ```
-https://github.com/Saintx0/wgl-memory      （私有）
+https://github.com/Saintx0/wgl-memory
 ```
 
-**手机上（TauriTavern）：** 扩展 → 安装扩展 → 填地址 → 刷新。
-
-私有库要凭据，两种办法：
-
-**A. 把 PAT 拼进 URL**（推荐，装完就不管了）
-
-1. GitHub → Settings → Developer settings → Personal access tokens → 生成一个只勾 `repo` 的 token
-2. 安装时填：`https://<你的PAT>@github.com/Saintx0/wgl-memory.git`
-
-**B. 临时改公开**
-
-仓库里只有 JS 和文档，没有任何密钥。改成 public → 手机装 → 改回 private。
-缺点是以后「更新」会重新要求认证。
+**手机上（TauriTavern）：** 扩展 → 安装扩展 → 填地址 → 刷新。零配置。
 
 **以后更新：** 电脑上 `git push`，手机上点扩展的「更新」。
 
----
+仓库是公开的，但没写简介、没加 topics，不挂首页——只有拿到链接的人才会看到。
+里面只有 JS 和文档，没有任何角色卡、聊天记录或密钥。
+
+想改回私有：`gh api -X PATCH repos/Saintx0/wgl-memory -F private=true`。
+已经装好的设备照常运行，只是以后「更新」会要求认证。
 
 ## 方案二：adb 直推（不建仓库，但要连一次电脑）
 
