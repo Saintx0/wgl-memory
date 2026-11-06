@@ -1,0 +1,36 @@
+.wgl-mem .wgl-preview {
+    max-height: 240px;
+    overflow: auto;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font-size: 12px;
+    line-height: 1.5;
+    background: var(--black30a);
+    border: 1px solid var(--SmartThemeBorderColor, #444);
+    padding: 8px;
+    border-radius: 6px;
+    margin-top: 6px;
+}
+
+.wgl-mem label {
+    display: block;
+    margin: 6px 0;
+}
+
+.wgl-mem .wgl-mem-row {
+    display: flex;
+    gap: 6px;
+    margin-top: 8px;
+    flex-wrap: wrap;
+}
+
+.wgl-mem .wgl-mem-row .menu_button {
+    flex: 1 1 auto;
+    text-align: center;
+}
+
+.wgl-mem .wgl-status {
+    font-size: 12px;
+    opacity: 0.85;
+    margin-top: 6px;
+}

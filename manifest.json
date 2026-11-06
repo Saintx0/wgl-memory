@@ -1,0 +1,13 @@
+{
+  "display_name": "罔两 · 记忆",
+  "loading_order": 90,
+  "requires": [],
+  "optional": [],
+  "js": "index.js",
+  "css": "style.css",
+  "generate_interceptor": "wgl_generateInterceptor",
+  "author": "wugliang",
+  "version": "1.2.0",
+  "homePage": "",
+  "auto_update": false
+}
