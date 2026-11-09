@@ -174,7 +174,7 @@ function parseMem(raw) {
         const m = line.match(/^\s*(事|增|人|钩)\s*[:：]\s*([\s\S]*)$/);
         if (!m) continue;
         const k = m[1];
-        const v = clean(m[2]);
+        const v = clean(m[2]).replace(/^(?:事|增|人|钩)\s*[:：]\s*/, '');
         if (k === '事') out.what = v;
         else if (k === '增') out.add = v;
         else if (k === '人') out.people = v.split(/[；;]/).map(clean).filter(Boolean);
@@ -200,8 +200,37 @@ function collectMems() {
     return out;
 }
 
-function mergeHooks(mems) {
-    const list = [];
+const norm = (t) => String(t).replace(/[，。、；：""''！？·\s\-—()（）]/g, '');
+
+function splitNames(v) {
+    return String(v).split(/[、,，和与\/／]/).map(clean).filter(Boolean);
+}
+
+function rosterNames(entries) {
+    const set = [];
+    for (const e of entries) {
+        for (const n of splitNames(e.cast)) if (n && !set.includes(n)) set.push(n);
+    }
+    return set;
+}
+
+function buildTimeline() {
+    const byTurn = new Map();
+    for (const e of collect()) byTurn.set(e.turn, { ...e });
+    for (const m of collectMems()) {
+        const cur = byTurn.get(m.turn) || { turn: m.turn };
+        cur.what = m.what || '';
+        cur.add = m.add || '';
+        cur.people = m.people || [];
+        cur.hooks = m.hooks || '';
+        byTurn.set(m.turn, cur);
+    }
+    return [...byTurn.values()].sort((a, b) => a.turn - b.turn);
+}
+
+function mergeHooks(mems, maxTurn) {
+    const list = [];   // { text, last }
+    const NOISE = /可能|也许|是不是|要不要|不知道|或许|大概/;
     for (const m of mems) {
         if (!m.hooks || /^无$/.test(m.hooks)) continue;
         for (const seg of m.hooks.split(/[｜|]/)) {
@@ -209,164 +238,124 @@ function mergeHooks(mems) {
             if (!t) continue;
             const sign = t[0];
             const body = clean(t.slice(1));
-            if (!body) continue;
-            if (sign === '+') { if (!list.includes(body)) list.push(body); }
-            else if (sign === '-') { const i = list.indexOf(body); if (i >= 0) list.splice(i, 1); }
+            if (!body || NOISE.test(body)) continue;
+            const nb = norm(body);
+            const same = (x) => {
+                const nx = norm(x.text);
+                return nx === nb || nx.includes(nb) || nb.includes(nx) || nx.slice(0, 8) === nb.slice(0, 8);
+            };
+            const at = list.findIndex(same);
+            if (sign === '+') {
+                if (at >= 0) list[at].last = m.turn;
+                else list.push({ text: body, last: m.turn });
+            } else if (sign === '-') {
+                if (at >= 0) list.splice(at, 1);
+                else list.push({ text: body, last: m.turn, done: true });
+            }
         }
     }
-    return list;
+    // 8 轮没再被提起的钩子自动过期——比"永远挂着"可靠
+    return list.filter((x) => !x.done && maxTurn - x.last <= 8).slice(-4).map((x) => x.text);
 }
 
-function mergePeople(mems) {
+function mergePeople(mems, names) {
     const map = new Map();
     for (const m of mems) {
-        for (const p of m.people) {
-            const i = p.search(/——|—|：|:/);
-            const name = i > 0 ? clean(p.slice(0, i)) : p;
-            map.set(name, p);
+        for (const raw of m.people) {
+            const p = clean(raw);
+            if (!p) continue;
+            let name = names.find((n) => p.startsWith(n));
+            if (!name) {
+                const i = p.search(/[，,——：:（(]/);
+                name = (i > 0 ? p.slice(0, i) : p.slice(0, 8)).trim();
+            }
+            map.set(name, p);       // 后出现的覆盖前面的 = 此刻
         }
     }
-    return [...map.values()].slice(0, 5);
+    const ordered = [...map.entries()].sort((a, b) => (names.indexOf(a[0]) - names.indexOf(b[0])));
+    return ordered.slice(0, 6).map(([, v]) => v);
 }
 
-/* ------------------------------------------- 事实：只采集，不改写（append-only） */
+/* --------------------------------------------------- 远史：分块 + 要点摘要 */
 
-const norm = (t) => t.replace(/[，。、；：""''！？·\s\-—()（）]/g, '');
-
-function collectFacts() {
-    const chat = ctx()?.chat ?? [];
-    const out = [];
-    const seen = [];
-    let turn = 0;
-    for (const msg of chat) {
-        if (!msg || msg.is_user || msg.is_system) continue;
-        turn += 1;
-        const text = messageText(msg);
-        RE_FACT.lastIndex = 0;
-        let m;
-        while ((m = RE_FACT.exec(text)) !== null) {
-            const f = clean(m[1]);
-            if (!f) continue;
-            const key = norm(f).slice(0, 14);
-            if (!key || seen.includes(key)) continue;
-            seen.push(key);
-            out.push({ turn, text: f });
-        }
-    }
-    return out;
-}
-
-/* ------------------------------- 名册与地点：纯机械统计，零模型依赖 */
-
-function splitNames(v) {
-    return String(v).split(/[、,，和与\/／]/).map(clean).filter(Boolean);
-}
-
-function roster(entries) {
-    const m = new Map();
-    for (const e of entries) for (const n of splitNames(e.cast)) m.set(n, (m.get(n) || 0) + 1);
-    return [...m.entries()].sort((a, b) => b[1] - a[1]);
-}
-
-function places(entries) {
-    const m = new Map();
-    for (const e of entries) { const v = clean(e.place); if (v) m.set(v, (m.get(v) || 0) + 1); }
-    return [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6);
-}
-
-/* ------------------------------------------ 远史：机械分层压缩（无 LLM） */
-
-function compressFar(entries, keepRecent) {
-    const old = entries.slice(0, Math.max(0, entries.length - keepRecent));
+function compressFar(timeline, keepRecent, chunkSize = 8) {
+    const old = timeline.slice(0, Math.max(0, timeline.length - keepRecent));
     if (!old.length) return [];
-    const groups = [];
+
+    const chunks = [];
     let cur = null;
     for (const e of old) {
         const key = e.place || '（未记地点）';
-        if (cur && cur.place === key) cur.items.push(e);
-        else { cur = { place: key, items: [e] }; groups.push(cur); }
+        if (!cur || cur.place !== key || cur.items.length >= chunkSize) {
+            cur = { place: key, items: [e] };
+            chunks.push(cur);
+        } else {
+            cur.items.push(e);
+        }
     }
-    return groups.slice(-8).map((g) => {
+
+    return chunks.slice(-10).map((g) => {
         const a = g.items[0];
         const b = g.items[g.items.length - 1];
         const span = (a.time && b.time && a.time !== b.time) ? `${a.time} → ${b.time}` : (a.time || b.time || '');
         const head = [`第${a.turn}–${b.turn}轮`, g.place, span].filter(Boolean).join('｜');
-        return `${head}｜结束于：${b.body || '—'}`;
+        const beats = g.items.map((x) => x.what).filter(Boolean);
+        const picks = beats.length <= 3 ? beats : [beats[0], beats[Math.floor(beats.length / 2)], beats[beats.length - 1]];
+        const tail = picks.length ? picks.join(' / ') : (b.body || '—');
+        return `${head}｜${tail}`;
     });
 }
 
 /* ------------------------------------------------------------ 组装注入 */
 
-function buildBlock(entries) {
+function buildBlock() {
     const s = S();
+    const timeline = buildTimeline();
     const parts = [];
 
     if (clean(s.facts)) parts.push('【设定·手动】\n' + String(s.facts).trim());
 
-    const facts = collectFacts().slice(0, 16);
-    if (facts.length) {
-        parts.push('【设定·已确立】（按轮次，同一件事以最早的为准）\n'
-            + facts.map((f) => `第${f.turn}轮｜${f.text}`).join('\n'));
-    }
-
     const mems = collectMems();
+    const names = rosterNames(timeline);
 
     if (mems.length) {
         const adds = [];
         for (const m of mems) {
-            if (!m.add || /^无$/.test(m.add)) continue;
-            const k = norm(m.add).slice(0, 14);
-            if (k && !adds.some((x) => norm(x.text).slice(0, 14) === k)) adds.push({ turn: m.turn, text: m.add });
+            const v = m.add || '';
+            if (!v || /^无$/.test(v)) continue;
+            const nv = norm(v);
+            const dup = adds.some((x) => {
+                const nx = norm(x.text);
+                return nx === nv || nx.includes(nv) || nv.includes(nx) || nx.slice(0, 8) === nv.slice(0, 8);
+            });
+            if (!dup) adds.push({ turn: m.turn, text: v });
         }
         if (adds.length) {
             parts.push('【设定·已确立】（按轮次，同一件事以最早的为准）\n'
                 + adds.slice(0, 12).map((a) => `第${a.turn}轮｜${a.text}`).join('\n'));
         }
 
-        const ppl = mergePeople(mems);
+        const ppl = mergePeople(mems, names);
         if (ppl.length) parts.push('【人物·此刻】\n' + ppl.join('\n'));
-
-        const events = mems.filter((m) => m.what).slice(-8);
-        if (events.length) {
-            parts.push('【事件日志】\n' + events.map((e) => `第${e.turn}轮｜${e.what}`).join('\n'));
-        }
-
-        const hooks2 = mergeHooks(mems);
-        if (hooks2.length) parts.push('【未了的事】\n' + hooks2.slice(-6).map((h) => `· ${h}`).join('\n'));
     }
 
-    if (entries.length) {
-        if (!mems.length) {
-            const names = roster(entries);
-            if (names.length) {
-                parts.push('【在场名册】（数字＝出现轮次；只出现一次的算过场，不要再让他开口）\n'
-                    + names.map(([n, c]) => (c > 1 ? `${n}（${c}）` : `${n}（${c}·过场）`)).join('、'));
-            }
-            const ps = places(entries);
-            if (ps.length) parts.push('【地点】（按出现次数）\n' + ps.map(([p, c]) => `${p}（${c}）`).join('、'));
-        }
+    if (timeline.length) {
+        const maxTurn = timeline[timeline.length - 1].turn;
+        const recent = timeline.slice(-Math.max(1, s.recent));
+        const lines = recent.map((e) => {
+            const head = [`第${e.turn}轮`, e.time, e.place, e.cast].filter(Boolean).join('｜');
+            const bits = [e.what, e.body, e.base && `基线=${e.base}`, e.tension && `紧度=${e.tension}`].filter(Boolean);
+            return head + '｜' + bits.join('；');
+        });
+        parts.push(`【时间线·最近 ${recent.length} 轮】\n` + lines.join('\n'));
 
-        const recent = entries.slice(-Math.max(1, s.recent));
-        parts.push(`【当前·最近 ${recent.length} 轮】\n` + recent.map((e) => {
-            const head = [`第${e.turn}轮`, e.place, e.time, e.cast].filter(Boolean).join('｜');
-            const tail = [e.body, e.base && `基线=${e.base}`, e.tension && `紧度=${e.tension}`]
-                .filter(Boolean).join('；');
-            return tail ? `${head}｜${tail}` : head;
-        }).join('\n'));
+        const far = compressFar(timeline, Math.max(1, s.recent));
+        if (far.length) parts.push('【远史】\n' + far.join('\n'));
 
-        const far = compressFar(entries, Math.max(1, s.recent));
-        if (far.length) parts.push('【远史·按地点合并】\n' + far.join('\n'));
+        const hooks = mergeHooks(mems, maxTurn);
+        if (hooks.length) parts.push('【未了的事】\n' + hooks.map((h) => `· ${h}`).join('\n'));
 
-        if (!mems.length) {
-            const hooks = [];
-            for (const e of entries.slice(-Math.max(4, s.recent * 2))) {
-                const h = clean(e.hook);
-                if (h && h !== '无' && !hooks.includes(h)) hooks.push(h);
-            }
-            if (hooks.length) parts.push('【未办的事】\n' + hooks.slice(-5).map((h) => `· ${h}`).join('\n'));
-        }
-
-        const newest = entries[entries.length - 1];
+        const newest = timeline[timeline.length - 1];
         if (newest.time) parts.push(`【当前故事时间】${newest.time}`);
     }
 
@@ -375,7 +364,7 @@ function buildBlock(entries) {
     parts.push(
         '以上是已经发生过的事，续写必须与之一致：\n'
         + '· 设定里同一件事出现多条时，以轮次最早的那一条为准，不许改写它。\n'
-        + '· 时间、地点、在场的人不许推翻；走了的人不许凭空回来。\n'
+        + '· 时间、地点、在场的人、衣着，不许推翻；走了的人不许凭空回来。\n'
         + '· 已经发生过的步骤不再重演，从上一条的落点往下接。\n'
         + '· 不许引入上面没出现过的人，不许另起一条线。',
     );
