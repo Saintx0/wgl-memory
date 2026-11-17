@@ -170,17 +170,18 @@ function collect() {
 /* ------------------------------- 记忆块 <mem>：模型顺手产出的结构化分析 */
 
 function parseMem(raw) {
-    const out = { what: '', add: '', people: [], hooks: '' };
+    const out = { what: '', add: '', people: [], hooks: '', recognize: '' };
     const segs = String(raw).replace(/\r/g, '').split(/\n|[｜|](?=\s*(?:事|增|人|钩)\s*[:：])/);
     for (const line of segs) {
-        const m = line.match(/^\s*(事|增|人|钩)\s*[:：]\s*([\s\S]*)$/);
+        const m = line.match(/^\s*(事|增|人|钩|认)\s*[:：]\s*([\s\S]*)$/);
         if (!m) continue;
         const k = m[1];
-        const v = clean(m[2]).replace(/^(?:事|增|人|钩)\s*[:：]\s*/, '');
+        const v = clean(m[2]).replace(/^(?:事|增|人|钩|认)\s*[:：]\s*/, '');
         if (k === '事') out.what = v;
         else if (k === '增') out.add = v;
         else if (k === '人') out.people = v.split(/[；;]/).map(clean).filter(Boolean);
         else if (k === '钩') out.hooks = v;
+        else if (k === '认') out.recognize = v;
     }
     return out;
 }
@@ -208,10 +209,13 @@ function splitNames(v) {
     return String(v).split(/[、,，和与\/／]/).map(clean).filter(Boolean);
 }
 
-function rosterNames(entries) {
+function rosterNames(entries, alias) {
     const set = [];
     for (const e of entries) {
-        for (const n of splitNames(e.cast)) if (n && !set.includes(n)) set.push(n);
+        for (const n of splitNames(e.cast)) {
+            const v = alias ? resolveName(n, alias) : n;
+            if (v && !set.includes(v)) set.push(v);
+        }
     }
     return set;
 }
@@ -229,6 +233,35 @@ function buildTimeline() {
     }
     return [...byTurn.values()].sort((a, b) => a.turn - b.turn);
 }
+
+function collectAliases(mems) {
+    const map = new Map();          // 旧称 -> 新称
+    const sup = (x) => clean(x).replace(/^[\s"“”‘’「」『』（）()]+|[\s"“”‘’「」『』（）()]+$/g, '');
+    for (const m of mems) {
+        const raw = m.recognize || '';
+        if (!raw || /^无$/.test(raw)) continue;
+        for (const seg of raw.split(/[｜|；;，,]/)) {
+            const parts = seg.split(/[=＝]|→|->|=>/);
+            if (parts.length < 2) continue;
+            const from = sup(parts[0]);
+            const to = sup(parts[parts.length - 1]);
+            if (from && to && from !== to) map.set(from, to);
+        }
+    }
+    // 链式：A＝B，B＝C → A＝C
+    for (const k of [...map.keys()]) {
+        let cur = map.get(k);
+        let guard = 0;
+        while (map.has(cur) && guard++ < 6) cur = map.get(cur);
+        map.set(k, cur);
+    }
+    return map;
+}
+
+const resolveName = (n, alias) => {
+    const t = clean(n);
+    return alias.has(t) ? alias.get(t) : t;
+};
 
 function mergeHooks(mems, maxTurn) {
     const list = [];   // { text, last }
@@ -260,7 +293,7 @@ function mergeHooks(mems, maxTurn) {
     return list.filter((x) => !x.done && maxTurn - x.last <= 8).slice(-4).map((x) => x.text);
 }
 
-function mergePeople(mems, names) {
+function mergePeople(mems, names, alias) {
     const map = new Map();
     for (const m of mems) {
         for (const raw of m.people) {
@@ -271,7 +304,7 @@ function mergePeople(mems, names) {
                 const i = p.search(/[，,——：:（(]/);
                 name = (i > 0 ? p.slice(0, i) : p.slice(0, 8)).trim();
             }
-            map.set(name, p);       // 后出现的覆盖前面的 = 此刻
+            map.set(resolveName(name, alias), p);   // 别名归一后再覆盖
         }
     }
     const ordered = [...map.entries()].sort((a, b) => (names.indexOf(a[0]) - names.indexOf(b[0])));
@@ -431,7 +464,8 @@ function buildBlock() {
     if (clean(s.facts)) parts.push('【设定·手动】\n' + String(s.facts).trim());
 
     const mems = collectMems();
-    const names = rosterNames(timeline);
+    const alias = collectAliases(mems);
+    const names = rosterNames(timeline, alias);
 
     if (mems.length) {
         const adds = [];
@@ -452,7 +486,7 @@ function buildBlock() {
                 + adds.slice(0, 12).map((a) => `第${a.turn}轮｜${a.text}`).join('\n'));
         }
 
-        const ppl = mergePeople(mems, names);
+        const ppl = mergePeople(mems, names, alias);
         if (ppl.length) parts.push('【人物·此刻】\n' + ppl.join('\n'));
     }
 
@@ -460,7 +494,8 @@ function buildBlock() {
         const maxTurn = timeline[timeline.length - 1].turn;
         const recent = timeline.slice(-Math.max(1, s.recent));
         const lines = recent.map((e) => {
-            const head = [`第${e.turn}轮`, e.time, e.place, e.cast].filter(Boolean).join('｜');
+            const cast = splitNames(e.cast).map((n) => resolveName(n, alias)).join('、') || e.cast;
+            const head = [`第${e.turn}轮`, e.time, e.place, cast].filter(Boolean).join('｜');
             const bits = [e.what, e.body, e.base && `基线=${e.base}`, e.tension && `紧度=${e.tension}`].filter(Boolean);
             return head + '｜' + bits.join('；');
         });
