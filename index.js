@@ -258,6 +258,15 @@ function collectAliases(mems) {
     return map;
 }
 
+const PRONOUN = /^(她|他|它|对方|那个人|这人)$/;
+
+/** 单人在场时把「她／他」消解成那个人；多人在场时保持原样（真的歧义，插件解不了） */
+function resolvePronoun(name, cast) {
+    if (!PRONOUN.test(name)) return name;
+    const others = [...new Set(cast.filter((n) => n && !/^[我你]$/.test(n)))];
+    return others.length === 1 ? others[0] : name;
+}
+
 const resolveName = (n, alias) => {
     const t = clean(n);
     return alias.has(t) ? alias.get(t) : t;
@@ -293,9 +302,10 @@ function mergeHooks(mems, maxTurn) {
     return list.filter((x) => !x.done && maxTurn - x.last <= 8).slice(-4).map((x) => x.text);
 }
 
-function mergePeople(mems, names, alias) {
+function mergePeople(mems, names, alias, castByTurn) {
     const map = new Map();
     for (const m of mems) {
+        const cast = castByTurn.get(m.turn) || [];
         for (const raw of m.people) {
             const p = clean(raw);
             if (!p) continue;
@@ -304,7 +314,11 @@ function mergePeople(mems, names, alias) {
                 const i = p.search(/[，,——：:（(]/);
                 name = (i > 0 ? p.slice(0, i) : p.slice(0, 8)).trim();
             }
-            map.set(resolveName(name, alias), p);   // 别名归一后再覆盖
+            const key = resolveName(resolvePronoun(name, cast), alias);
+            if (PRONOUN.test(key)) continue;      // 多人在场时「她」真的指不清，宁可不写这条
+            // 名字换了，行首的称呼也要跟着换，否则显示的还是「她——…」
+            const shown = (key !== name && p.startsWith(name)) ? key + p.slice(name.length) : p;
+            map.set(key, shown);   // 代词消解 → 别名归一 → 覆盖
         }
     }
     const ordered = [...map.entries()].sort((a, b) => (names.indexOf(a[0]) - names.indexOf(b[0])));
@@ -465,6 +479,7 @@ function buildBlock() {
 
     const mems = collectMems();
     const alias = collectAliases(mems);
+    const castByTurn = new Map(timeline.map((e) => [e.turn, splitNames(e.cast)]));
     const names = rosterNames(timeline, alias);
 
     if (mems.length) {
@@ -486,7 +501,7 @@ function buildBlock() {
                 + adds.slice(0, 12).map((a) => `第${a.turn}轮｜${a.text}`).join('\n'));
         }
 
-        const ppl = mergePeople(mems, names, alias);
+        const ppl = mergePeople(mems, names, alias, castByTurn);
         if (ppl.length) parts.push('【人物·此刻】\n' + ppl.join('\n'));
     }
 
