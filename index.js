@@ -13,6 +13,8 @@ const DEFAULTS = {
     recent: 6,
     maxEntries: 80,
     fallbackChars: 36,
+    cardAnchor: true,   // 自动读角色卡，生成【卡·不可改】
+    cardBudget: 260,    // 卡锚点最多多少字
     facts: '',
 };
 
@@ -306,12 +308,125 @@ function compressFar(timeline, keepRecent, chunkSize = 8) {
     });
 }
 
+
+/* --------------------------------------------------- 角色卡：自动锚点 */
+
+const CARD_STOP = /^\s*(?:<[/!]?[a-zA-Z]|【?(?:角色|身份|背景|设定|外貌|性格|关系|备注|注意|提示|简介|description)\b|---|===|\*\*\*)/i;
+const CARD_FACT = /岁|身高|体重|职业|工作|身份|住在|家里|父母|爸|妈|兄|姐|弟|妹|妻|夫|孩子|喜欢|讨厌|害怕|习惯|口头禅|疤|痣|胎记|过敏|左|右|头发|眼睛|声音|说话/;
+
+function stem(t, names) {
+    let x = norm(t);
+    for (const n of names || []) { const v = norm(n); if (v) x = x.split(v).join(''); }
+    return x.replace(/^[她他它我你]/, '');
+}
+
+function activeCharacters(c) {
+    try {
+        if (c?.groupId && c?.groups?.[c.groupId]?.members) {
+            return c.groups[c.groupId].members.map((m) => c.characters?.[m]).filter(Boolean);
+        }
+        if (Number.isInteger(c?.characterId) && c?.characters?.[c.characterId]) {
+            return [c.characters[c.characterId]];
+        }
+    } catch { /* noop */ }
+    return [];
+}
+
+function cardLines(text) {
+    return String(text || '')
+        .replace(/<br\s*\/?>/gi, '\n')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/&nbsp;/g, ' ')
+        .replace(/\r/g, '')
+        .split('\n')
+        .map((l) => l.replace(/\s+/g, ' ').trim())
+        .filter(Boolean);
+}
+
+function pickFacts(lines, limit) {
+    const out = [];
+    const push = (t) => {
+        const v = t.length > 48 ? t.slice(0, 48) + '…' : t;
+        if (v.length >= 4 && !out.includes(v)) out.push(v);
+    };
+    for (const l of lines) {
+        if (CARD_STOP.test(l) || l.length < 4 || l.length > 90) continue;
+        if (!CARD_FACT.test(l)) continue;
+        push(l);
+        if (out.length >= limit) break;
+    }
+    if (out.length < 2) {                      // 抽不到就退回前几行
+        for (const l of lines) {
+            if (CARD_STOP.test(l) || l.length < 4) continue;
+            push(l);
+            if (out.length >= Math.min(limit, 3)) break;
+        }
+    }
+    return out;
+}
+
+function bookFacts(ch) {
+    const entries = ch?.data?.character_book?.entries;
+    if (!Array.isArray(entries)) return [];
+    const rows = [];
+    for (const e of entries) {
+        if (!e || e.enabled === false) continue;
+        const first = String(e.content || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+        if (!first) continue;
+        rows.push({ text: first.length > 46 ? first.slice(0, 46) + '…' : first, constant: !!e.constant });
+    }
+    rows.sort((a, b) => (b.constant ? 1 : 0) - (a.constant ? 1 : 0));
+    return rows.slice(0, 3).map((r) => r.text);
+}
+
+function readCard() {
+    const c = ctx();
+    const chars = activeCharacters(c);
+    if (!chars.length) return null;
+
+    const out = { names: chars.map((x) => clean(x.name)).filter(Boolean), facts: [] };
+    for (const ch of chars) {
+        const lines = cardLines(ch.description);
+        out.facts.push(...pickFacts(lines, 6));
+        const pers = cardLines(ch.personality).join('；');
+        if (pers) out.facts.push('性格：' + (pers.length > 44 ? pers.slice(0, 44) + '…' : pers));
+        out.facts.push(...bookFacts(ch));
+    }
+    out.facts = [...new Set(out.facts)].slice(0, 9);
+    return (out.names.length || out.facts.length) ? out : null;
+}
+
+function buildCardBlock(card, budget) {
+    if (!card) return '';
+    const lines = [];
+    if (card.names.length) lines.push('名字：' + card.names.join('、'));
+    for (const f of card.facts) lines.push('· ' + f);
+
+    let body = '';
+    for (const l of lines) {
+        if ((body + l).length > budget) break;
+        body += l + '\n';
+    }
+    body = body.trim();
+    if (!body) return '';
+    return '【卡·不可改】（优先级最高：下面的记忆与这里冲突，一律以这里为准）\n' + body;
+}
+
 /* ------------------------------------------------------------ 组装注入 */
 
 function buildBlock() {
     const s = S();
     const timeline = buildTimeline();
     const parts = [];
+
+    let card = null;
+    if (s.cardAnchor) {
+        try { card = readCard(); } catch (e) { console.warn('[罔两·记忆] 读角色卡失败', e); }
+    }
+    const cardFacts = card ? card.facts : [];
+    const cardStems = cardFacts.map((f) => stem(f, card ? card.names : []));
+    const cardBlock = buildCardBlock(card, Math.max(80, Number(s.cardBudget) || 260));
+    if (cardBlock) parts.push(cardBlock);
 
     if (clean(s.facts)) parts.push('【设定·手动】\n' + String(s.facts).trim());
 
@@ -328,7 +443,9 @@ function buildBlock() {
                 const nx = norm(x.text);
                 return nx === nv || nx.includes(nv) || nv.includes(nx) || nx.slice(0, 8) === nv.slice(0, 8);
             });
-            if (!dup) adds.push({ turn: m.turn, text: v });
+            const nv0 = stem(v, card ? card.names : []);
+            const onCard = nv0.length >= 5 && cardStems.some((nf) => nf.includes(nv0) || nv0.includes(nf));
+            if (!dup && !onCard) adds.push({ turn: m.turn, text: v });
         }
         if (adds.length) {
             parts.push('【设定·已确立】（按轮次，同一件事以最早的为准）\n'
@@ -442,6 +559,7 @@ function ensurePanel() {
     </div>
     <div class="inline-drawer-content">
       <label class="checkbox_label"><input type="checkbox" id="wgl-enabled" ${s.enabled ? 'checked' : ''}><span>启用</span></label>
+      <label class="checkbox_label"><input type="checkbox" id="wgl-card" ${s.cardAnchor ? 'checked' : ''}><span>自动读角色卡（卡内嵌世界书也读）</span></label>
       <label>注入深度 <input type="number" id="wgl-depth" class="text_pole" min="0" max="20" value="${s.depth}"></label>
       <label>逐条保留轮数 <input type="number" id="wgl-recent" class="text_pole" min="1" max="30" value="${s.recent}"></label>
       <label>扫描轮数上限 <input type="number" id="wgl-max" class="text_pole" min="8" max="400" value="${s.maxEntries}"></label>
@@ -467,6 +585,7 @@ function ensurePanel() {
     const on = (id, ev, fn) => document.getElementById(id)?.addEventListener(ev, fn);
     const bind = () => {
         on('wgl-enabled', 'change', (e) => { s.enabled = e.target.checked; persist(); bust(); });
+        on('wgl-card', 'change', (e) => { s.cardAnchor = e.target.checked; persist(); bust(); });
         on('wgl-depth', 'input', (e) => { s.depth = Number(e.target.value) || 0; persist(); bust(); });
         on('wgl-recent', 'input', (e) => { s.recent = Math.max(1, Number(e.target.value) || 6); persist(); bust(); });
         on('wgl-max', 'input', (e) => { s.maxEntries = Math.max(8, Number(e.target.value) || 80); persist(); bust(); });
